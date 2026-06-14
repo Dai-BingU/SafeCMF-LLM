@@ -18,17 +18,12 @@ High-resolution PDF version: [assets/framework.pdf](assets/framework.pdf)
 
 ## What Is Included
 
-- Code support for a structured CMF evidence store derived from CMF
-  Clearinghouse records.
-- Scripts and schemas for constructing the supervised reranking dataset with
-  crash-context queries, candidate evidence pools, and reviewed Top-K evidence
-  labels.
-- Context-aware candidate retrieval and scoring utilities.
-- Mechanism-aware recall augmentation and engineering applicability filtering.
-- Data builders for candidate-constrained SFT training.
-- Evaluation utilities for evidence-level, countermeasure-level, and
-  mechanism-level agreement.
-- Static demo builders for visualizing retrieval and reranking outputs.
+- Core utilities for representing CMF records as structured evidence cards.
+- Candidate evidence construction with context-based scoring, mechanism-aware
+  augmentation, and engineering applicability filtering.
+- Data formatting and evaluation scripts for candidate-constrained LLM reranking.
+- A framework figure and lightweight demo utilities for illustrating the
+  retrieval-reranking workflow.
 
 ## Repository Layout
 
@@ -37,7 +32,7 @@ cmfrec/
   Core retrieval, scoring, context inference, mechanism recall, and utility code.
 
 scripts/
-  Dataset construction, retrieval, SFT formatting, evaluation, audit, and demo
+  Dataset construction, retrieval, SFT formatting, evaluation, and demo
   generation scripts.
 
 data/evidence_store.jsonl
