@@ -14,8 +14,6 @@ and literature source.
 
 ![Evidence-grounded countermeasure recommendation framework](assets/framework.png)
 
-High-resolution PDF version: [assets/framework.pdf](assets/framework.pdf)
-
 ## What Is Included
 
 - Core utilities for representing CMF records as structured evidence cards.
