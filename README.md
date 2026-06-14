@@ -14,6 +14,14 @@ and literature source.
 
 ![Evidence-grounded countermeasure recommendation framework](assets/framework.png)
 
+## Example Case
+
+The example below illustrates how a crash-context question is mapped to a
+candidate countermeasure pool and then reranked into evidence-grounded Top-3
+recommendations.
+
+![Example case for rural horizontal-curve countermeasure recommendation](assets/example_curve_case.png)
+
 ## What Is Included
 
 - Core utilities for representing CMF records as structured evidence cards.
