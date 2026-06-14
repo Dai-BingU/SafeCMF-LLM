@@ -1,0 +1,32 @@
+.DS_Store
+._*
+__pycache__/
+.pytest_cache/
+.Rhistory
+.env
+*.log
+*.tmp
+*.bak
+*.docx
+*.pptx
+*.zip
+
+# Local-only artifacts
+adapters/
+models/
+out/
+ChatSUMO-Agent-main/
+ChatSUMO-Agent-main.zip
+
+# Historical/intermediate data artifacts.
+# Final release aliases live under data/release/.
+data/evidence_store.jsonl
+data/candidates.*.jsonl
+data/queries.training_*.jsonl
+data/labels.reco.training_*.jsonl
+data/splits/
+data/repair/queries.source_preserving_repairs_v*.jsonl
+data/repair/labels.source_preserving_repairs_v*.jsonl
+!data/release/
+data/release/*.jsonl
+!data/release/README.md

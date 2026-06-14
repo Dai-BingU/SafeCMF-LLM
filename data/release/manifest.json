@@ -1,0 +1,22 @@
+{
+  "release_style": "combined",
+  "reviewed_rerank_examples": {
+    "path": "data/release/reviewed_rerank_examples.jsonl",
+    "records": 2150,
+    "description": "One row per reviewed crash-context query with reference Top-K evidence labels."
+  },
+  "sft_top20_examples": {
+    "path": "data/release/sft_top20_examples.jsonl",
+    "records": 2150,
+    "description": "One row per model-ready SFT example with split field and compact Top-20 candidate pool."
+  },
+  "source_files": {
+    "main_queries": "data/release/main_queries.jsonl",
+    "main_labels": "data/release/main_labels.jsonl",
+    "repair_queries": "data/release/repair_queries.jsonl",
+    "repair_labels": "data/release/repair_labels.jsonl",
+    "sft_top20_train": "data/release/sft_top20_train.jsonl",
+    "sft_top20_dev": "data/release/sft_top20_dev.jsonl",
+    "sft_top20_test": "data/release/sft_top20_test.jsonl"
+  }
+}

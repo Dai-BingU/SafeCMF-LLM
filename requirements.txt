@@ -1,0 +1,11 @@
+numpy
+matplotlib
+openai
+torch
+transformers
+datasets
+accelerate
+peft
+trl
+safetensors
+bitsandbytes
