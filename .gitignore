@@ -20,7 +20,6 @@ ChatSUMO-Agent-main.zip
 
 # Historical/intermediate data artifacts.
 # Final release aliases live under data/release/.
-data/evidence_store.jsonl
 data/candidates.*.jsonl
 data/queries.training_*.jsonl
 data/labels.reco.training_*.jsonl

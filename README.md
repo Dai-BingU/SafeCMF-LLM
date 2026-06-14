@@ -36,8 +36,7 @@ scripts/
   generation scripts.
 
 data/evidence_store.jsonl
-  Expected location for structured CMF evidence cards used as the evidence fact
-  table.
+  Structured CMF evidence cards used as the evidence fact table.
 
 data/release/
   Dataset schema and release metadata.
@@ -51,19 +50,19 @@ out/
 
 ## Data Availability
 
-The experimental dataset is organized around three components:
+This repository includes:
 
-- 8,844 CMF evidence cards.
-- 2,150 reviewed query-label examples.
-- 1,827 training examples, 108 validation examples, and 215 test examples.
+- `data/evidence_store.jsonl`: 8,844 structured CMF evidence cards.
+- `data/release/README.md`: schema notes for the reviewed reranking dataset.
+- `data/release/manifest.json`: metadata for the reviewed reranking dataset.
 
-The dataset uses the following stable file names:
+The reviewed reranking dataset contains 2,150 query-label examples in the
+experimental setup, with 1,827 training examples, 108 validation examples, and
+215 test examples. Its two-file organization is:
 
 ```text
-data/evidence_store.jsonl
 data/release/reviewed_rerank_examples.jsonl
 data/release/sft_top20_examples.jsonl
-data/release/manifest.json
 ```
 
 `reviewed_rerank_examples.jsonl` contains one row per reviewed crash-context

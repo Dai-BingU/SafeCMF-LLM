@@ -3,7 +3,7 @@
 This directory documents the stable dataset files used in the
 candidate-constrained CMF evidence reranking experiments.
 
-## Public Release Files
+## Reranking Dataset Files
 
 ```text
 reviewed_rerank_examples.jsonl
