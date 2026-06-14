@@ -38,39 +38,31 @@ cmfrec/
 
 scripts/
   Dataset construction, retrieval, SFT formatting, evaluation, audit, and demo
-  generation scripts. Many historical repair scripts are retained for audit
-  traceability, but the release dataset is under data/release/.
+  generation scripts.
 
 data/evidence_store.jsonl
-  Structured CMF evidence cards. This file is kept local in the pre-acceptance
-  repository and may be released later depending on data redistribution
-  requirements.
+  Expected location for structured CMF evidence cards used as the evidence fact
+  table.
 
 data/release/
-  Data schema and release notes. The full reviewed query/label JSONL files are
-  withheld from the public repository during manuscript review.
+  Dataset schema and release metadata.
 
 docs/
   Review notes and project documentation.
 
 out/
-  Generated review/demo webpages. This directory is ignored by default because
-  it can be regenerated.
+  Generated review/demo webpages.
 ```
 
 ## Data Availability
 
-The full reviewed query-label dataset is not included in the pre-acceptance
-public repository. It will be released after the manuscript is accepted, subject
-to data redistribution requirements.
-
-The final internal dataset contains:
+The experimental dataset is organized around three components:
 
 - 8,844 CMF evidence cards.
 - 2,150 reviewed query-label examples.
 - 1,827 training examples, 108 validation examples, and 215 test examples.
 
-When released, the dataset will use the following stable file names:
+The dataset uses the following stable file names:
 
 ```text
 data/evidence_store.jsonl
@@ -138,9 +130,9 @@ negative-effect conflicts.
 ## Quick Start
 
 Use Python 3.10 or newer. Most retrieval and data inspection scripts rely on the
-standard library plus the local `cmfrec` package. The full data files are kept
-local in the pre-acceptance repository, so data-dependent scripts require the
-local dataset. When running scripts directly, set `PYTHONPATH=.`:
+standard library plus the local `cmfrec` package. Data-dependent scripts require
+the dataset files at the paths described above. When running scripts directly,
+set `PYTHONPATH=.`:
 
 ```bash
 cd /path/to/this/repository
@@ -183,9 +175,8 @@ The release SFT files are already formatted for candidate-constrained supervised
 fine-tuning. The training examples use compact Top-20 evidence cards to control
 context length.
 
-Model training was conducted outside this repository on GPU machines using
-open-source LLM backbones and parameter-efficient fine-tuning. Model weights and
-LoRA adapters are not included in the GitHub release by default.
+Model training can be conducted on GPU machines using open-source LLM backbones
+and parameter-efficient fine-tuning.
 
 For GPU training, install the appropriate CUDA-compatible PyTorch build for your
 machine, then install typical SFT dependencies such as:
