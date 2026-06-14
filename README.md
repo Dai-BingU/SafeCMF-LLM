@@ -25,29 +25,6 @@ High-resolution PDF version: [assets/framework.pdf](assets/framework.pdf)
 - A framework figure and lightweight demo utilities for illustrating the
   retrieval-reranking workflow.
 
-## Repository Layout
-
-```text
-cmfrec/
-  Core retrieval, scoring, context inference, mechanism recall, and utility code.
-
-scripts/
-  Dataset construction, retrieval, SFT formatting, evaluation, and demo
-  generation scripts.
-
-data/evidence_store.jsonl
-  Structured CMF evidence cards used as the evidence fact table.
-
-data/release/
-  Dataset schema and release metadata.
-
-docs/
-  Review notes and project documentation.
-
-out/
-  Generated review/demo webpages.
-```
-
 ## Data Availability
 
 This repository includes:
