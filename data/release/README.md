@@ -1,38 +1,31 @@
-# Release Data
+# Example data
 
-This directory documents the stable dataset files used in the
-candidate-constrained CMF evidence reranking experiments.
+This directory provides **100 examples sampled from the final 2,635-record training split**. No test records are included. The full study has 2,935 queries (2,635 training / 300 test); the complete query-label dataset and model weights are not included in this release.
 
-## Reranking Dataset Files
+## Files
 
-```text
-reviewed_rerank_examples.jsonl
-sft_top20_examples.jsonl
-manifest.json
-```
+- [`examples100.jsonl`](examples100.jsonl): one JSON object per line, including query, candidate Evidence Cards, and reference output.
+- [`manifest.json`](manifest.json): source release, sampling method, counts, selected query IDs, and SHA-256 checksums.
+- [`../evidence_store.jsonl`](../evidence_store.jsonl): the existing store of 8,844 CMF Evidence Cards for looking up evidence IDs.
 
-The evidence source is stored at:
+## Record format
 
-```text
-data/evidence_store.jsonl
-```
+| Field | Meaning |
+|---|---|
+| `qid` | Query identifier |
+| `split` | Always `train` |
+| `scenario_group_id`, `split_group_id` | Group identifiers retained from the source split |
+| `query_completeness`, `missingness_type` | Query completeness and the missing-information category |
+| `visible_context` | Structured context available in the query |
+| `input.user_text` | Natural-language crash-context query |
+| `input.candidates` | Compact candidate Evidence Cards supplied to the model |
+| `target.recommendations` | Zero to three ranked reference recommendations, each with `rank` and `evidence_ids` |
+| `source_release` | Identifier of the final study release |
 
-## Counts
+Candidate cards include the evidence ID, countermeasure, category, applicability conditions, effect estimates, and star rating. Reference evidence IDs belong to the record's candidate pool. An empty recommendation list represents abstention.
 
-| File | Records |
-|---|---:|
-| `reviewed_rerank_examples.jsonl` | 2,150 |
-| `sft_top20_examples.jsonl` | 2,150 |
+## Sampling
 
-The supervised reranking dataset contains 2,150 query-label examples in total.
+Sampling uses seed `20261014`, stratified by query completeness and reference recommendation count, with unique split groups. The sample contains 65 complete queries and 35 controlled incomplete queries. The counts for zero, one, two, and three reference recommendations are 20, 12, 21, and 47, respectively. Neither query IDs nor split-group IDs overlap the final test set.
 
-## File Meaning
-
-- `reviewed_rerank_examples.jsonl`: one row per reviewed crash-context query.
-  Each row contains the query text, target context, source evidence ID, reviewed
-  Top-K reference labels, and compact metadata.
-- `sft_top20_examples.jsonl`: one row per model-ready supervised fine-tuning
-  example. Each row contains a `split` field, prompt, and target completion with
-  the reviewed evidence IDs.
-- `manifest.json`: release metadata.
-- Evidence IDs in labels and SFT targets refer to `data/evidence_store.jsonl`.
+The query, candidates, and target are retained from the source training records. This is a demonstration sample, not a benchmark or a complete reproduction package for the paper's reported results.

@@ -29,3 +29,4 @@ data/repair/labels.source_preserving_repairs_v*.jsonl
 !data/release/
 data/release/*.jsonl
 !data/release/README.md
+!data/release/examples100.jsonl
