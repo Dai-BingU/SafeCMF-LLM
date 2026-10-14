@@ -4,7 +4,7 @@
 
 Bingyou Dai, Xuesong Wang, Guangzhuo Tang, Yuxiang Feng, Qiming Guo, Yu Bai
 
-*Accident Analysis & Prevention* · Author proof
+*Accident Analysis & Prevention*
 
 SafeCMF-LLM recommends road safety countermeasures from natural-language crash scenarios. It combines a store of **8,844 CMF Evidence Cards**, mechanism-aware candidate construction, and a fine-tuned LLM that selects up to three traceable evidence IDs.
 
