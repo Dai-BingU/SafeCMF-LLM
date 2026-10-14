@@ -15,11 +15,13 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 
 from cmfrec.free_text import infer_query_from_text  # noqa: E402
 from cmfrec.mechanism_recall import (  # noqa: E402
+    MechanismRecallConfig,
     access_management_supplement_ids,
     advance_guidance_supplement_ids,
     candidate_context_mismatch,
     frontage_road_supplement_ids,
     hidden_precondition_mismatch,
+    interchange_merge_supplement_ids,
     managed_lane_supplement_ids,
     median_opening_supplement_ids,
     passing_lane_supplement_ids,
@@ -28,14 +30,16 @@ from cmfrec.mechanism_recall import (  # noqa: E402
     signalized_left_turn_supplement_ids,
     signal_visibility_supplement_ids,
     shoulder_improvement_supplement_ids,
+    skew_realignment_supplement_ids,
     stop_control_supplement_ids,
     nighttime_segment_supplement_ids,
     toll_plaza_supplement_ids,
     winter_weather_supplement_ids,
 )
 from cmfrec.scoring import DEFAULT_TEACHER_CONFIG, Query, score_row  # noqa: E402
-from cmfrec.facility import resolve_query_facility_type  # noqa: E402
+from cmfrec.facility import infer_facility_type_for_evidence, resolve_query_facility_type  # noqa: E402
 from cmfrec.context_tags import infer_context_tags_from_user_text  # noqa: E402
+from cmfrec.countermeasure_family import mechanism_family  # noqa: E402
 
 
 def _norm(value: object) -> str | None:
@@ -247,46 +251,158 @@ def _dedup_evidence_ids(
     return out
 
 
+def _append_compatible_backfill(
+    current: list[str],
+    ranked_fallback: list[str],
+    *,
+    evidence_by_id: dict[str, dict[str, object]],
+    mode: str,
+    target_minimum: int,
+    hard_limit: int,
+) -> tuple[list[str], list[str]]:
+    """Fill a short diverse list without disturbing its existing ranking.
+
+    Every fallback ID comes from the already filtered, positively scored pool.
+    The staged caller first permits a new exact treatment, then a new CMF row,
+    and only then any distinct evidence ID. No random or context-conflicting
+    card is introduced merely to reach the teacher-visible minimum.
+    """
+    out = [str(x) for x in current]
+    seen_ids = set(out)
+    seen_keys: set[str] = set()
+    if mode != "none":
+        for eid in out:
+            ev = evidence_by_id.get(eid) or {}
+            key = _candidate_dedup_key(ev, mode)
+            if key:
+                seen_keys.add(key)
+    added: list[str] = []
+    for eid0 in ranked_fallback:
+        eid = str(eid0)
+        if eid in seen_ids:
+            continue
+        ev = evidence_by_id.get(eid) or {}
+        key = None if mode == "none" else _candidate_dedup_key(ev, mode)
+        if key and key in seen_keys:
+            continue
+        out.append(eid)
+        added.append(eid)
+        seen_ids.add(eid)
+        if key:
+            seen_keys.add(key)
+        if len(out) >= target_minimum or len(out) >= hard_limit:
+            break
+    return out, added
+
+
+def _teacher_diverse_ids(
+    evidence_ids: list[str],
+    *,
+    evidence_by_id: dict[str, dict[str, object]],
+    limit: int,
+    allow_alternative_evidence: bool = True,
+) -> list[str]:
+    """Build a diverse teacher prefix without discarding master-pool evidence."""
+    ranked = [str(eid) for eid in evidence_ids if str(eid) in evidence_by_id]
+    out: list[str] = []
+    seen_ids: set[str] = set()
+    seen_families: set[str] = set()
+    seen_treatments: set[str] = set()
+
+    # First expose one card per engineering mechanism family.
+    for eid in ranked:
+        family = mechanism_family(evidence_by_id[eid])
+        treatment = _norm_countermeasure_text(evidence_by_id[eid].get("countermeasure"))
+        if family in seen_families or treatment in seen_treatments:
+            continue
+        out.append(eid)
+        seen_ids.add(eid)
+        seen_families.add(family)
+        seen_treatments.add(treatment)
+        if len(out) >= limit:
+            return out
+
+    # Then allow distinct treatments within an already represented family.
+    for eid in ranked:
+        if eid in seen_ids:
+            continue
+        treatment = _norm_countermeasure_text(evidence_by_id[eid].get("countermeasure"))
+        if treatment in seen_treatments:
+            continue
+        out.append(eid)
+        seen_ids.add(eid)
+        seen_treatments.add(treatment)
+        if len(out) >= limit:
+            return out
+
+    if not allow_alternative_evidence:
+        return out
+
+    # Finally retain alternative evidence cards if explicitly requested.
+    for eid in ranked:
+        if eid in seen_ids:
+            continue
+        out.append(eid)
+        seen_ids.add(eid)
+        if len(out) >= limit:
+            break
+    return out
+
+
 def _to_query_from_context(ctx: dict[str, object], *, user_text: str | None = None) -> Query:
+    # The reconstructed queries intentionally store only visible structured
+    # context. Some plainly stated facts (most often crash type) live only in
+    # user_text, so use the deterministic text parser solely as a fallback for
+    # fields absent from the visible context. This never consults a paired base
+    # query or hidden reconstruction metadata.
+    inferred = infer_query_from_text(str(user_text or "")).query if user_text else Query()
     facility_type = resolve_query_facility_type(
         str(user_text or ""),
-        facility_type=_norm(ctx.get("facility_type")),
-        intersection_related=_norm(ctx.get("intersection_related")),
+        facility_type=_norm(ctx.get("facility_type")) or inferred.facility_type,
+        intersection_related=_norm(ctx.get("intersection_related")) or inferred.intersection_related,
     )
     context_tags = ()
     if user_text:
         context_tags = infer_context_tags_from_user_text(str(user_text))
     return Query(
-        crash_type=_norm(ctx.get("crash_type")),
-        severity=_norm(ctx.get("severity_kabco")) or _norm(ctx.get("severity")),
-        roadway_type=_norm(ctx.get("roadway_type")),
-        area_type=_norm(ctx.get("area_type")),
+        crash_type=_norm(ctx.get("crash_type")) or inferred.crash_type,
+        severity=_norm(ctx.get("severity_kabco")) or _norm(ctx.get("severity")) or inferred.severity,
+        roadway_type=_norm(ctx.get("roadway_type")) or inferred.roadway_type,
+        area_type=_norm(ctx.get("area_type")) or inferred.area_type,
         facility_type=facility_type,
-        intersection_related=_norm(ctx.get("intersection_related")),
-        traffic_control_type=_norm(ctx.get("traffic_control_type")),
-        intersection_geometry=_norm(ctx.get("intersection_geometry")),
-        min_speed_limit=ctx.get("min_speed_limit") if isinstance(ctx.get("min_speed_limit"), (int, float)) else None,
-        max_speed_limit=ctx.get("max_speed_limit") if isinstance(ctx.get("max_speed_limit"), (int, float)) else None,
+        intersection_related=_norm(ctx.get("intersection_related")) or inferred.intersection_related,
+        traffic_control_type=_norm(ctx.get("traffic_control_type")) or inferred.traffic_control_type,
+        intersection_geometry=_norm(ctx.get("intersection_geometry")) or inferred.intersection_geometry,
+        min_speed_limit=(
+            ctx.get("min_speed_limit")
+            if isinstance(ctx.get("min_speed_limit"), (int, float))
+            else inferred.min_speed_limit
+        ),
+        max_speed_limit=(
+            ctx.get("max_speed_limit")
+            if isinstance(ctx.get("max_speed_limit"), (int, float))
+            else inferred.max_speed_limit
+        ),
         num_lanes=(
             ctx.get("num_lanes") if isinstance(ctx.get("num_lanes"), (int, float)) else
             (ctx.get("max_num_lanes") if isinstance(ctx.get("max_num_lanes"), (int, float)) else
-             (ctx.get("min_num_lanes") if isinstance(ctx.get("min_num_lanes"), (int, float)) else None))
+             (ctx.get("min_num_lanes") if isinstance(ctx.get("min_num_lanes"), (int, float)) else inferred.num_lanes))
         ),
         traffic_volume_aadt=(
             ctx.get("traffic_volume_aadt") if isinstance(ctx.get("traffic_volume_aadt"), (int, float)) else
             (ctx.get("avg_traffic_volume_non_intersection") if isinstance(ctx.get("avg_traffic_volume_non_intersection"), (int, float)) else
              (ctx.get("max_traffic_volume_non_intersection") if isinstance(ctx.get("max_traffic_volume_non_intersection"), (int, float)) else
-              (ctx.get("min_traffic_volume_non_intersection") if isinstance(ctx.get("min_traffic_volume_non_intersection"), (int, float)) else None)))
+              (ctx.get("min_traffic_volume_non_intersection") if isinstance(ctx.get("min_traffic_volume_non_intersection"), (int, float)) else inferred.traffic_volume_aadt)))
         ),
         major_road_volume_aadt=(
             ctx.get("avg_major_road_traffic_volume") if isinstance(ctx.get("avg_major_road_traffic_volume"), (int, float)) else
             (ctx.get("max_major_road_traffic_volume") if isinstance(ctx.get("max_major_road_traffic_volume"), (int, float)) else
-             (ctx.get("min_major_road_traffic_volume") if isinstance(ctx.get("min_major_road_traffic_volume"), (int, float)) else None))
+             (ctx.get("min_major_road_traffic_volume") if isinstance(ctx.get("min_major_road_traffic_volume"), (int, float)) else inferred.major_road_volume_aadt))
         ),
         minor_road_volume_aadt=(
             ctx.get("avg_minor_road_traffic_volume") if isinstance(ctx.get("avg_minor_road_traffic_volume"), (int, float)) else
             (ctx.get("max_minor_road_traffic_volume") if isinstance(ctx.get("max_minor_road_traffic_volume"), (int, float)) else
-             (ctx.get("min_minor_road_traffic_volume") if isinstance(ctx.get("min_minor_road_traffic_volume"), (int, float)) else None))
+             (ctx.get("min_minor_road_traffic_volume") if isinstance(ctx.get("min_minor_road_traffic_volume"), (int, float)) else inferred.minor_road_volume_aadt))
         ),
         countermeasure_category=None,
         countermeasure_subcategory=None,
@@ -391,6 +507,12 @@ def main() -> None:
         help="If >0, stop after processing this many queries (debug/smoke test)",
     )
     ap.add_argument(
+        "--start-query",
+        type=int,
+        default=0,
+        help="Zero-based input row at which to start processing (for deterministic sharding).",
+    )
+    ap.add_argument(
         "--use-target-context",
         action="store_true",
         help="Use queries.target_context (oracle) instead of parsing user_text",
@@ -417,6 +539,22 @@ def main() -> None:
         choices=["strict", "robust"],
         default="strict",
         help="Matching mode for retrieval scoring (strict excludes mismatches; robust keeps mismatches with downweight)",
+    )
+    ap.add_argument(
+        "--disable-context-retrieval",
+        action="store_true",
+        help=(
+            "Ablation: disable query-context indexing and matching for the initial retrieval stage. "
+            "Evidence is ranked only by estimated safety effect and evidence quality; other enabled modules remain unchanged."
+        ),
+    )
+    ap.add_argument(
+        "--disable-applicability-filtering",
+        action="store_true",
+        help=(
+            "Ablation: disable the standalone hidden-precondition and engineering-context conflict filters. "
+            "Basic evidence validity/effect checks and other enabled modules remain unchanged."
+        ),
     )
     ap.add_argument(
         "--match-score-power",
@@ -469,6 +607,38 @@ def main() -> None:
         help=(
             "De-duplicate the retrieved candidate list before writing it. "
             "'countermeasure' removes repeated exact treatment names; 'family' also collapses common near-duplicate variants."
+        ),
+    )
+    ap.add_argument(
+        "--min-candidates",
+        type=int,
+        default=0,
+        help=(
+            "Minimum compatible candidates to retain after diversity de-duplication. "
+            "Short lists are backfilled only from already filtered, positively scored evidence."
+        ),
+    )
+    ap.add_argument(
+        "--teacher-top-n",
+        type=int,
+        default=0,
+        help="If >0, also store a separately diversified teacher_candidate_evidence_ids list.",
+    )
+    ap.add_argument(
+        "--teacher-unique-treatments-only",
+        action="store_true",
+        help=(
+            "Keep at most one Evidence Card per normalized treatment in the teacher pool. "
+            "Sparse facilities may therefore have fewer than --teacher-top-n cards; the full master pool is unchanged."
+        ),
+    )
+    ap.add_argument(
+        "--master-diversity-slots",
+        type=int,
+        default=0,
+        help=(
+            "Reserve this many leading master-pool positions for distinct engineering mechanisms/treatments; "
+            "remaining positions retain the highest-ranked compatible evidence cards."
         ),
     )
     ap.add_argument(
@@ -550,6 +720,15 @@ def main() -> None:
         help="If >0, append stop-control signing/marking candidates for stop-controlled intersection queries.",
     )
     ap.add_argument(
+        "--force-include-skew-realignment-mechanism-top",
+        type=int,
+        default=0,
+        help=(
+            "If >0, append compatible skew-angle CMFunction evidence for explicitly skewed, "
+            "stop-controlled urban or rural intersections."
+        ),
+    )
+    ap.add_argument(
         "--force-include-median-opening-mechanism-top",
         type=int,
         default=0,
@@ -584,6 +763,12 @@ def main() -> None:
         type=int,
         default=0,
         help="If >0, append HOV-to-HOT candidates for managed-lane/HOV access or weaving queries.",
+    )
+    ap.add_argument(
+        "--force-include-interchange-merge-mechanism-top",
+        type=int,
+        default=0,
+        help="If >0, append acceleration-lane, ramp-metering, merge/diverge, and weaving candidates for ramp queries.",
     )
     ap.add_argument(
         "--force-include-winter-weather-mechanism-top",
@@ -666,6 +851,10 @@ def main() -> None:
             c = ev.get("conditions") or {}
             q = ev.get("quality") or {}
             e = ev.get("effect") or {}
+            derived_facility_type = infer_facility_type_for_evidence(
+                countermeasure=ev.get("countermeasure"),
+                conditions=c,
+            )
 
             crash = _norm(c.get("crash_type"))
             if crash and "," in crash:
@@ -702,7 +891,7 @@ def main() -> None:
                     "KABCO Crash Severity": str(c.get("severity_kabco") or ""),
                     "Roadway Type": str(c.get("roadway_type") or ""),
                     "Area Type": str(c.get("area_type") or ""),
-                    "Facility Type": str(c.get("facility_type") or ""),
+                    "Facility Type": str(c.get("facility_type") or derived_facility_type or ""),
                     "Intersection Related": str(c.get("intersection_related") or ""),
                     "Traffic Control Type": str(c.get("traffic_control_type") or ""),
                     "Intersection Type": str(c.get("intersection_type") or ""),
@@ -865,6 +1054,7 @@ def main() -> None:
             family_pools["left_turn_lane"].add(i)
         if _text_has(text, ("median barrier", "cable median barrier", "median guardrail")):
             family_pools["median_barrier"].add(i)
+        family_pools[f"mechanism:{mechanism_family(ev)}"].add(i)
 
     def _split_multi(value: str | None) -> list[str]:
         if not value:
@@ -949,6 +1139,97 @@ def main() -> None:
         if "cross median" in search_text or "cross-median" in search_text or "head on" in search_text or "head-on" in search_text:
             out.extend(["median_barrier", "rumble_strips"])
 
+        def add_mechanisms(*names: str) -> None:
+            out.extend(f"mechanism:{name}" for name in names)
+
+        if "angle" in search_text:
+            add_mechanisms(
+                "intersection_control_roundabout",
+                "intersection_control_signalization",
+                "intersection_warning_conflict_system",
+                "intersection_advance_guidance_signing",
+                "intersection_stop_sign_visibility_signing",
+                "intersection_warning_flashing_beacon",
+                "signal_visibility",
+                "access_management_median_opening",
+                "access_management_driveway",
+            )
+        if "left turn" in search_text or "left-turn" in search_text:
+            add_mechanisms(
+                "intersection_left_turn_lane",
+                "intersection_left_turn_phasing",
+                "intersection_left_turn_offset",
+                "intersection_restricted_crossing_u_turn",
+                "access_management_raised_median",
+                "access_management_median_opening",
+            )
+        if "rear end" in search_text or "rear-end" in search_text:
+            add_mechanisms(
+                "signal_change_interval",
+                "signal_operations_adaptive_control",
+                "intersection_left_turn_lane",
+                "access_management_driveway",
+                "speed_enforcement",
+                "pavement_friction",
+            )
+        if "run off road" in search_text or "run-off-road" in search_text or "lane departure" in search_text:
+            add_mechanisms(
+                "lane_departure_rumble_combined",
+                "lane_departure_centerline_rumble",
+                "lane_departure_shoulder_rumble",
+                "lane_departure_safety_edge",
+                "shoulder_improvement_pave",
+                "shoulder_improvement_widen",
+                "curve_guidance_delineation",
+                "pavement_friction",
+                "roadside_guardrail",
+                "roadside_fixed_object_removal",
+                "roadside_sideslope_improvement",
+                "median_barrier",
+            )
+        if "night" in search_text:
+            add_mechanisms("lighting", "night_visibility_pavement_markers", "curve_guidance_delineation", "signal_visibility")
+        if "wet" in search_text or "friction" in search_text:
+            add_mechanisms("pavement_friction")
+        if "ped" in search_text:
+            add_mechanisms(
+                "active_transport_uncontrolled_crossing_beacon",
+                "active_transport_uncontrolled_crossing_refuge",
+                "active_transport_uncontrolled_crossing_traffic_calming",
+                "active_transport_pedestrian_signal",
+                "active_transport_pedestrian_signal_timing",
+                "active_transport_sidewalk",
+            )
+        if "bicycle" in search_text or "bike" in search_text:
+            add_mechanisms(
+                "active_transport_bicycle_lane",
+                "active_transport_bicycle_track",
+                "active_transport_bicycle_crossing_speed_control",
+            )
+        if "speed" in search_text:
+            add_mechanisms(
+                "speed_enforcement",
+                "speed_management_posted_limit",
+                "speed_management_variable_speed_limit",
+                "speed_management_traffic_calming",
+            )
+        if "multiple" in search_text or "mixed" in search_text:
+            add_mechanisms(
+                "access_management_driveway",
+                "access_management_raised_median",
+                "lane_reconfiguration_road_diet",
+                "signal_operations_adaptive_control",
+                "speed_enforcement",
+            )
+        if is_segment and any(term in search_text for term in ("freeway", "expressway", "interstate")):
+            add_mechanisms(
+                "median_barrier",
+                "lane_departure_shoulder_rumble",
+                "shoulder_improvement_widen",
+                "speed_management_variable_speed_limit",
+                "roadside_fixed_object_removal",
+            )
+
         seen: set[str] = set()
         deduped: list[str] = []
         for name in out:
@@ -990,14 +1271,20 @@ def main() -> None:
     with open(args.queries, "r", encoding="utf-8") as fin, open(
         args.out, "w", encoding="utf-8"
     ) as fout:
-        for line in fin:
+        for input_index, line in enumerate(fin):
+            if input_index < int(args.start_query):
+                continue
             q = json.loads(line)
             user_text = q.get("user_text") or ""
 
             if args.use_target_context:
                 ctx = q.get("target_context") or {}
                 query = _to_query_from_context(ctx, user_text=str(user_text))
-                parsed = {"mode": "target_context", "context": ctx}
+                parsed = {
+                    "mode": "visible_target_context_plus_user_text_fallback",
+                    "context": ctx,
+                    "hidden_or_paired_context_used": False,
+                }
             elif use_llm_parser:
                 parsed_obj = _parse_context_with_llm(
                     llm_tok,
@@ -1033,24 +1320,38 @@ def main() -> None:
                     "notes": inferred.notes,
                 }
 
-            # Filter candidates using indexes (fast).
+            # Initial context-aware retrieval. In the ablation, the entire
+            # evidence store is ranked by effect and evidence quality only.
             pool: set[int] | None = None
-            for field, val in [
-                ("crash_type", query.crash_type),
-                ("area_type", query.area_type),
-                ("intersection_related", query.intersection_related),
-                ("traffic_control_type", query.traffic_control_type),
-                ("intersection_geometry", query.intersection_geometry),
-            ]:
-                cand = candidates_for_field(field, val)
-                if cand is None:
-                    continue
-                pool = cand if pool is None else pool.intersection(cand)
+            if not args.disable_context_retrieval:
+                for field, val in [
+                    ("crash_type", query.crash_type),
+                    ("area_type", query.area_type),
+                    ("intersection_related", query.intersection_related),
+                    ("traffic_control_type", query.traffic_control_type),
+                    ("intersection_geometry", query.intersection_geometry),
+                ]:
+                    cand = candidates_for_field(field, val)
+                    if cand is None:
+                        continue
+                    pool = cand if pool is None else pool.intersection(cand)
 
-            if pool is None or not pool:
+            if args.disable_context_retrieval or pool is None or not pool:
                 pool_list = all_indices
             else:
                 pool_list = list(pool)
+
+            scoring_query = Query() if args.disable_context_retrieval else query
+            mechanism_recall_cfg = MechanismRecallConfig(
+                apply_applicability_filter=not args.disable_applicability_filtering
+            )
+
+            def applicability_conflict(ev: dict) -> bool:
+                if args.disable_applicability_filtering or not user_text:
+                    return False
+                return hidden_precondition_mismatch(ev, str(user_text)) or candidate_context_mismatch(
+                    ev, str(user_text), query
+                )
 
             provenance: dict[str, set[str]] = defaultdict(set)
 
@@ -1096,12 +1397,10 @@ def main() -> None:
 
             scored: list[tuple[float, int]] = []
             for ev_idx in pool_list:
-                if user_text and hidden_precondition_mismatch(evidences[ev_idx], str(user_text)):
+                if applicability_conflict(evidences[ev_idx]):
                     continue
-                if user_text and candidate_context_mismatch(evidences[ev_idx], str(user_text), query):
-                    continue
-                s = score_row(score_rows[ev_idx], query, match_mode=args.match_mode, cfg=cfg)
-                if s is None:
+                s = score_row(score_rows[ev_idx], scoring_query, match_mode=args.match_mode, cfg=cfg)
+                if s is None or float(s.total_score) <= 0:
                     continue
                 scored.append((s.total_score, ev_idx))
 
@@ -1132,8 +1431,10 @@ def main() -> None:
                 if "ped" in qt:
                     ped_scored: list[tuple[float, int]] = []
                     for ev_idx in ped_category_pool:
+                        if applicability_conflict(evidences[ev_idx]):
+                            continue
                         s = score_row(score_rows[ev_idx], query, match_mode=args.match_mode, cfg=cfg)
-                        if s is None:
+                        if s is None or float(s.total_score) <= 0:
                             continue
                         ped_scored.append((s.total_score, int(ev_idx)))
                     ped_scored.sort(key=lambda t: t[0], reverse=True)
@@ -1160,8 +1461,10 @@ def main() -> None:
                 for pool_name in matched_target_pools:
                     target_query = query_for_target_pool(query, pool_name)
                     for ev_idx in targeted_pools.get(pool_name, set()):
+                        if applicability_conflict(evidences[ev_idx]):
+                            continue
                         s = score_row(score_rows[ev_idx], target_query, match_mode=args.match_mode, cfg=cfg)
-                        if s is None:
+                        if s is None or float(s.total_score) <= 0:
                             continue
                         target_scores[int(ev_idx)] = max(float(s.total_score), target_scores.get(int(ev_idx), -1e18))
                 target_scored = [(score, ev_idx) for ev_idx, score in target_scores.items()]
@@ -1177,8 +1480,10 @@ def main() -> None:
                         target_query = query_for_target_pool(query, pool_name)
                         pool_scored: list[tuple[float, int]] = []
                         for ev_idx in targeted_pools.get(pool_name, set()):
+                            if applicability_conflict(evidences[ev_idx]):
+                                continue
                             s = score_row(score_rows[ev_idx], target_query, match_mode=args.match_mode, cfg=cfg)
-                            if s is None:
+                            if s is None or float(s.total_score) <= 0:
                                 continue
                             pool_scored.append((float(s.total_score), int(ev_idx)))
                         pool_scored.sort(key=lambda t: t[0], reverse=True)
@@ -1203,8 +1508,10 @@ def main() -> None:
                     # Score family slots under the original query. This preserves facility/control constraints
                     # while ensuring each expected mechanism class has a chance to enter the candidate pool.
                     for ev_idx in family_pools.get(family_name, set()):
+                        if applicability_conflict(evidences[ev_idx]):
+                            continue
                         s = score_row(score_rows[ev_idx], query, match_mode=args.match_mode, cfg=cfg)
-                        if s is None:
+                        if s is None or float(s.total_score) <= 0:
                             continue
                         family_scored.append((float(s.total_score), int(ev_idx)))
                     family_scored.sort(key=lambda t: t[0], reverse=True)
@@ -1232,15 +1539,16 @@ def main() -> None:
                     evidences=evidences,
                     score_rows=score_rows,
                     existing_ids=set(top),
+                    cfg=mechanism_recall_cfg,
                 )[: int(args.force_include_roadside_mechanism_top)]
                 if args.include_candidate_provenance:
                     for eid in roadside_forced:
                         provenance[str(eid)].add("mechanism_recall:roadside")
                 top = _dedup_evidence_ids(
-                    [*top, *roadside_forced],
+                    [*roadside_forced, *top],
                     evidence_by_id=evidence_by_id,
                     mode=str(args.candidate_dedup_key),
-                    limit=int(args.top_n) + int(args.force_include_roadside_mechanism_top),
+                    limit=int(args.top_n),
                     scores_by_eid=score_by_eid,
                     quality_tiebreak=bool(args.dedup_quality_tiebreak),
                     quality_tiebreak_margin=float(args.dedup_quality_tiebreak_margin),
@@ -1253,15 +1561,16 @@ def main() -> None:
                     evidences=evidences,
                     score_rows=score_rows,
                     existing_ids=set(top),
+                    cfg=mechanism_recall_cfg,
                 )[: int(args.force_include_nighttime_segment_mechanism_top)]
                 if args.include_candidate_provenance:
                     for eid in night_forced:
                         provenance[str(eid)].add("mechanism_recall:nighttime_segment")
                 top = _dedup_evidence_ids(
-                    [*top, *night_forced],
+                    [*night_forced, *top],
                     evidence_by_id=evidence_by_id,
                     mode=str(args.candidate_dedup_key),
-                    limit=int(args.top_n) + int(args.force_include_nighttime_segment_mechanism_top),
+                    limit=int(args.top_n),
                     scores_by_eid=score_by_eid,
                     quality_tiebreak=bool(args.dedup_quality_tiebreak),
                     quality_tiebreak_margin=float(args.dedup_quality_tiebreak_margin),
@@ -1274,15 +1583,16 @@ def main() -> None:
                     evidences=evidences,
                     score_rows=score_rows,
                     existing_ids=set(top),
+                    cfg=mechanism_recall_cfg,
                 )[: int(args.force_include_access_management_mechanism_top)]
                 if args.include_candidate_provenance:
                     for eid in access_forced:
                         provenance[str(eid)].add("mechanism_recall:access_management")
                 top = _dedup_evidence_ids(
-                    [*top, *access_forced],
+                    [*access_forced, *top],
                     evidence_by_id=evidence_by_id,
                     mode=str(args.candidate_dedup_key),
-                    limit=int(args.top_n) + int(args.force_include_access_management_mechanism_top),
+                    limit=int(args.top_n),
                     scores_by_eid=score_by_eid,
                     quality_tiebreak=bool(args.dedup_quality_tiebreak),
                     quality_tiebreak_margin=float(args.dedup_quality_tiebreak_margin),
@@ -1295,15 +1605,16 @@ def main() -> None:
                     evidences=evidences,
                     score_rows=score_rows,
                     existing_ids=set(top),
+                    cfg=mechanism_recall_cfg,
                 )[: int(args.force_include_signal_visibility_mechanism_top)]
                 if args.include_candidate_provenance:
                     for eid in signal_forced:
                         provenance[str(eid)].add("mechanism_recall:signal_visibility")
                 top = _dedup_evidence_ids(
-                    [*top, *signal_forced],
+                    [*signal_forced, *top],
                     evidence_by_id=evidence_by_id,
                     mode=str(args.candidate_dedup_key),
-                    limit=int(args.top_n) + int(args.force_include_signal_visibility_mechanism_top),
+                    limit=int(args.top_n),
                     scores_by_eid=score_by_eid,
                     quality_tiebreak=bool(args.dedup_quality_tiebreak),
                     quality_tiebreak_margin=float(args.dedup_quality_tiebreak_margin),
@@ -1316,15 +1627,16 @@ def main() -> None:
                     evidences=evidences,
                     score_rows=score_rows,
                     existing_ids=set(top),
+                    cfg=mechanism_recall_cfg,
                 )[: int(args.force_include_signalized_left_turn_mechanism_top)]
                 if args.include_candidate_provenance:
                     for eid in signal_left_forced:
                         provenance[str(eid)].add("mechanism_recall:signalized_left_turn")
                 top = _dedup_evidence_ids(
-                    [*top, *signal_left_forced],
+                    [*signal_left_forced, *top],
                     evidence_by_id=evidence_by_id,
                     mode=str(args.candidate_dedup_key),
-                    limit=int(args.top_n) + int(args.force_include_signalized_left_turn_mechanism_top),
+                    limit=int(args.top_n),
                     scores_by_eid=score_by_eid,
                     quality_tiebreak=bool(args.dedup_quality_tiebreak),
                     quality_tiebreak_margin=float(args.dedup_quality_tiebreak_margin),
@@ -1337,15 +1649,16 @@ def main() -> None:
                     evidences=evidences,
                     score_rows=score_rows,
                     existing_ids=set(top),
+                    cfg=mechanism_recall_cfg,
                 )[: int(args.force_include_stop_control_mechanism_top)]
                 if args.include_candidate_provenance:
                     for eid in stop_forced:
                         provenance[str(eid)].add("mechanism_recall:stop_control")
                 top = _dedup_evidence_ids(
-                    [*top, *stop_forced],
+                    [*stop_forced, *top],
                     evidence_by_id=evidence_by_id,
                     mode=str(args.candidate_dedup_key),
-                    limit=int(args.top_n) + int(args.force_include_stop_control_mechanism_top),
+                    limit=int(args.top_n),
                     scores_by_eid=score_by_eid,
                     quality_tiebreak=bool(args.dedup_quality_tiebreak),
                     quality_tiebreak_margin=float(args.dedup_quality_tiebreak_margin),
@@ -1358,15 +1671,16 @@ def main() -> None:
                     evidences=evidences,
                     score_rows=score_rows,
                     existing_ids=set(top),
+                    cfg=mechanism_recall_cfg,
                 )[: int(args.force_include_median_opening_mechanism_top)]
                 if args.include_candidate_provenance:
                     for eid in median_forced:
                         provenance[str(eid)].add("mechanism_recall:median_opening")
                 top = _dedup_evidence_ids(
-                    [*top, *median_forced],
+                    [*median_forced, *top],
                     evidence_by_id=evidence_by_id,
                     mode=str(args.candidate_dedup_key),
-                    limit=int(args.top_n) + int(args.force_include_median_opening_mechanism_top),
+                    limit=int(args.top_n),
                     scores_by_eid=score_by_eid,
                     quality_tiebreak=bool(args.dedup_quality_tiebreak),
                     quality_tiebreak_margin=float(args.dedup_quality_tiebreak_margin),
@@ -1379,15 +1693,43 @@ def main() -> None:
                     evidences=evidences,
                     score_rows=score_rows,
                     existing_ids=set(top),
+                    cfg=mechanism_recall_cfg,
                 )[: int(args.force_include_passing_lane_mechanism_top)]
                 if args.include_candidate_provenance:
                     for eid in passing_forced:
                         provenance[str(eid)].add("mechanism_recall:passing_lane")
                 top = _dedup_evidence_ids(
-                    [*top, *passing_forced],
+                    [*passing_forced, *top],
                     evidence_by_id=evidence_by_id,
                     mode=str(args.candidate_dedup_key),
-                    limit=int(args.top_n) + int(args.force_include_passing_lane_mechanism_top),
+                    limit=int(args.top_n),
+                    scores_by_eid=score_by_eid,
+                    quality_tiebreak=bool(args.dedup_quality_tiebreak),
+                    quality_tiebreak_margin=float(args.dedup_quality_tiebreak_margin),
+                )
+
+            if int(args.force_include_interchange_merge_mechanism_top) > 0:
+                # Re-score the whole store, including IDs already present in
+                # the generic list, then move the best ramp-specific families
+                # into the teacher-visible prefix. Merely appending an already
+                # retrieved acceleration-lane card at rank 55 does not solve a
+                # Top-30 truncation failure.
+                interchange_forced = interchange_merge_supplement_ids(
+                    user_text=str(user_text),
+                    query=query,
+                    evidences=evidences,
+                    score_rows=score_rows,
+                    existing_ids=set(),
+                    cfg=mechanism_recall_cfg,
+                )[: int(args.force_include_interchange_merge_mechanism_top)]
+                if args.include_candidate_provenance:
+                    for eid in interchange_forced:
+                        provenance[str(eid)].add("mechanism_recall:interchange_merge")
+                top = _dedup_evidence_ids(
+                    [*interchange_forced, *top],
+                    evidence_by_id=evidence_by_id,
+                    mode=str(args.candidate_dedup_key),
+                    limit=int(args.top_n),
                     scores_by_eid=score_by_eid,
                     quality_tiebreak=bool(args.dedup_quality_tiebreak),
                     quality_tiebreak_margin=float(args.dedup_quality_tiebreak_margin),
@@ -1403,6 +1745,11 @@ def main() -> None:
                     "ped_crossing",
                     int(args.force_include_ped_crossing_mechanism_top),
                     pedestrian_crossing_supplement_ids,
+                ),
+                (
+                    "skew_realignment",
+                    int(args.force_include_skew_realignment_mechanism_top),
+                    skew_realignment_supplement_ids,
                 ),
                 (
                     "frontage_road",
@@ -1439,15 +1786,16 @@ def main() -> None:
                     evidences=evidences,
                     score_rows=score_rows,
                     existing_ids=set(top),
+                    cfg=mechanism_recall_cfg,
                 )[:mechanism_top]
                 if args.include_candidate_provenance:
                     for eid in forced:
                         provenance[str(eid)].add(f"mechanism_recall:{mechanism_name}")
                 top = _dedup_evidence_ids(
-                    [*top, *forced],
+                    [*forced, *top],
                     evidence_by_id=evidence_by_id,
                     mode=str(args.candidate_dedup_key),
-                    limit=int(args.top_n) + mechanism_top,
+                    limit=int(args.top_n),
                     scores_by_eid=score_by_eid,
                     quality_tiebreak=bool(args.dedup_quality_tiebreak),
                     quality_tiebreak_margin=float(args.dedup_quality_tiebreak_margin),
@@ -1492,11 +1840,80 @@ def main() -> None:
                         quality_tiebreak=False,
                     )
 
+            # Every supplemental path must obey the same visible-text
+            # applicability filters as the main scored pool. This final guard
+            # prevents a mechanism supplement from reintroducing a card that
+            # was correctly rejected earlier.
+            if user_text and not args.disable_applicability_filtering:
+                top = [
+                    str(eid)
+                    for eid in top
+                    if str(eid) in evidence_by_id
+                    and not hidden_precondition_mismatch(evidence_by_id[str(eid)], str(user_text))
+                    and not candidate_context_mismatch(evidence_by_id[str(eid)], str(user_text), query)
+                ]
+
+            if int(args.master_diversity_slots) > 0:
+                master_diverse = _teacher_diverse_ids(
+                    [*top, *[str(x) for x in scored_eids if x is not None]],
+                    evidence_by_id=evidence_by_id,
+                    limit=min(int(args.master_diversity_slots), int(args.top_n)),
+                )
+                if args.include_candidate_provenance:
+                    for eid in master_diverse:
+                        provenance[eid].add("master_diversity_slot")
+                top = _dedup_evidence_ids(
+                    [*master_diverse, *top, *[str(x) for x in scored_eids if x is not None]],
+                    evidence_by_id=evidence_by_id,
+                    mode="none",
+                    limit=int(args.top_n),
+                )
+
+            backfill_summary = {
+                "requested_minimum": int(args.min_candidates),
+                "before_backfill": len(top),
+                "added_by_countermeasure": 0,
+                "added_by_cm_id": 0,
+                "added_by_evidence_id": 0,
+            }
+            if int(args.min_candidates) > 0 and len(top) < int(args.min_candidates):
+                ranked_fallback = [str(x) for x in scored_eids if x is not None]
+                for mode, summary_key in (
+                    ("countermeasure", "added_by_countermeasure"),
+                    ("cm_id", "added_by_cm_id"),
+                    ("none", "added_by_evidence_id"),
+                ):
+                    top, added = _append_compatible_backfill(
+                        top,
+                        ranked_fallback,
+                        evidence_by_id=evidence_by_id,
+                        mode=mode,
+                        target_minimum=int(args.min_candidates),
+                        hard_limit=int(args.top_n),
+                    )
+                    backfill_summary[summary_key] = len(added)
+                    if args.include_candidate_provenance:
+                        for eid in added:
+                            provenance[eid].add(f"compatible_backfill:{mode}")
+                    if len(top) >= int(args.min_candidates):
+                        break
+            backfill_summary["after_backfill"] = len(top)
+
             # Add random distractors (avoid duplicates).
             if args.mix_random > 0:
                 existing = set(top)
-                for _ in range(args.mix_random * 3):
+                for _ in range(args.mix_random * 20):
                     ev = evidences[random.choice(all_indices)]
+                    if applicability_conflict(ev):
+                        continue
+                    effect = ev.get("effect") or {}
+                    try:
+                        if effect.get("crf") is not None and float(effect["crf"]) < 0.0:
+                            continue
+                        if effect.get("cmf") is not None and float(effect["cmf"]) > 1.0:
+                            continue
+                    except Exception:
+                        continue
                     eid = str(ev.get("evidence_id"))
                     if eid and eid not in existing:
                         top.append(eid)
@@ -1515,6 +1932,17 @@ def main() -> None:
                     quality_tiebreak_margin=float(args.dedup_quality_tiebreak_margin),
                 )
 
+            teacher_ids = (
+                _teacher_diverse_ids(
+                    top,
+                    evidence_by_id=evidence_by_id,
+                    limit=int(args.teacher_top_n),
+                    allow_alternative_evidence=not bool(args.teacher_unique_treatments_only),
+                )
+                if int(args.teacher_top_n) > 0
+                else []
+            )
+
             rec = {
                 "qid": q.get("qid"),
                 "user_text": user_text,
@@ -1527,13 +1955,21 @@ def main() -> None:
                 "signal_visibility_mechanism_recall": int(args.force_include_signal_visibility_mechanism_top),
                 "signalized_left_turn_mechanism_recall": int(args.force_include_signalized_left_turn_mechanism_top),
                 "stop_control_mechanism_recall": int(args.force_include_stop_control_mechanism_top),
+                "skew_realignment_mechanism_recall": int(args.force_include_skew_realignment_mechanism_top),
                 "median_opening_mechanism_recall": int(args.force_include_median_opening_mechanism_top),
                 "passing_lane_mechanism_recall": int(args.force_include_passing_lane_mechanism_top),
+                "interchange_merge_mechanism_recall": int(args.force_include_interchange_merge_mechanism_top),
                 "candidate_dedup_key": args.candidate_dedup_key,
                 "dedup_quality_tiebreak": bool(args.dedup_quality_tiebreak),
                 "dedup_quality_tiebreak_margin": args.dedup_quality_tiebreak_margin,
+                "compatible_backfill": backfill_summary,
+                "master_diversity_slots": int(args.master_diversity_slots),
                 "candidate_evidence_ids": top,
             }
+            if int(args.teacher_top_n) > 0:
+                rec["teacher_top_n"] = int(args.teacher_top_n)
+                rec["teacher_unique_treatments_only"] = bool(args.teacher_unique_treatments_only)
+                rec["teacher_candidate_evidence_ids"] = teacher_ids
             if args.include_candidate_provenance:
                 rec["candidate_provenance"] = {
                     eid: sorted(provenance.get(str(eid), {"unknown"}))

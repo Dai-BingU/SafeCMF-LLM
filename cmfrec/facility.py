@@ -30,14 +30,24 @@ _INTERCHANGE_KWS: list[str] = [
     "grade-separated",
     "flyover",
     "cloverleaf",
-    "freeway",
-    "expressway",
+    "freeway access area",
+]
+
+_SEGMENT_KWS: list[str] = [
+    "segment",
+    "mainline",
+    "roadway section",
+    "road section",
+    "corridor",
 ]
 
 
 def _has_any(text: str, kws: Iterable[str]) -> bool:
     t = (text or "").lower()
-    return any(k in t for k in kws)
+    return any(
+        re.search(rf"\b{re.escape(k)}\b", t) is not None if k in {"ddi", "dcd"} else k in t
+        for k in kws
+    )
 
 
 def infer_facility_type_from_user_text(
@@ -48,13 +58,17 @@ def infer_facility_type_from_user_text(
     """
     Infer facility type for the *site* described in user_text.
 
-    - If user explicitly mentions an interchange/ramp/freeway context => interchange.
+    - If user explicitly mentions an interchange/ramp context => interchange.
+    - Freeway/expressway mainline segments remain segments.
     - Else fallback to intersection_related:
         - yes => at_grade_intersection
         - no  => segment
     """
     if _has_any(user_text or "", _INTERCHANGE_KWS):
         return FACILITY_INTERCHANGE
+
+    if _has_any(user_text or "", _SEGMENT_KWS):
+        return FACILITY_SEGMENT
 
     ir = (intersection_related or "").strip().lower()
     if ir == "yes":
@@ -87,6 +101,12 @@ def resolve_query_facility_type(
         and "intersection" in (user_text or "").lower()
     ):
         return FACILITY_AT_GRADE_INTERSECTION
+    if (
+        normalized == FACILITY_INTERCHANGE
+        and inferred == FACILITY_SEGMENT
+        and not _has_any(user_text or "", _INTERCHANGE_KWS)
+    ):
+        return FACILITY_SEGMENT
     return normalized
 
 

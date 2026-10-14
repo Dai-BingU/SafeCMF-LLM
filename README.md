@@ -14,6 +14,10 @@ SafeCMF-LLM recommends road safety countermeasures from natural-language crash s
 
 Candidate construction uses context-aware retrieval, mechanism-aware recall augmentation, and engineering applicability filtering. The LLM selects Evidence IDs from the candidate pool; countermeasure descriptions, effect estimates, and sources are retrieved from the evidence store.
 
+## Code
+
+Training, inference, retrieval, and evaluation code is available in [`scripts/`](scripts/). See [Usage](docs/usage.md) for installation and commands.
+
 ## Example data
 
 The example dataset contains **100 records sampled from the final training set**:

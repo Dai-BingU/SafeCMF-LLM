@@ -8,6 +8,7 @@ _TAG_RAIL_CROSSING = "rail_crossing"
 _TAG_SCHOOL_ZONE = "school_zone"
 _TAG_TOLL_PLAZA = "toll_plaza"
 _TAG_INTERCHANGE = "interchange"
+_TAG_INTERSECTION_SKEW = "intersection_skew"
 
 ALL_CONTEXT_TAGS = {
     _TAG_TRANSIT,
@@ -15,6 +16,7 @@ ALL_CONTEXT_TAGS = {
     _TAG_SCHOOL_ZONE,
     _TAG_TOLL_PLAZA,
     _TAG_INTERCHANGE,
+    _TAG_INTERSECTION_SKEW,
 }
 
 
@@ -45,7 +47,7 @@ def _contains_keyword(text: str, keyword: str) -> bool:
         return False
     # Short acronyms such as DDI/DCD must be token matches; otherwise words
     # like "additional" accidentally trigger interchange context via "ddi".
-    if keyword in {"ddi", "dcd"}:
+    if keyword in {"ddi", "dcd", "ort"}:
         return re.search(rf"\b{re.escape(keyword)}\b", text) is not None
     return keyword in text
 
@@ -121,6 +123,18 @@ _INTERCHANGE_KWS = [
     "acceleration lane",
 ]
 
+_INTERSECTION_SKEW_KWS = [
+    "skewed intersection",
+    "skewed three-leg",
+    "skewed four-leg",
+    "skewed three leg",
+    "skewed four leg",
+    "intersection skew",
+    "skew angle",
+    "skewed angle",
+    "acute intersection angle",
+]
+
 
 def infer_context_tags_from_user_text(user_text: str) -> tuple[str, ...]:
     """
@@ -146,6 +160,8 @@ def infer_context_tags_from_user_text(user_text: str) -> tuple[str, ...]:
         add(_TAG_TOLL_PLAZA)
     if _contains_any_keyword(t, _INTERCHANGE_KWS):
         add(_TAG_INTERCHANGE)
+    if _contains_any_keyword(t, _INTERSECTION_SKEW_KWS):
+        add(_TAG_INTERSECTION_SKEW)
 
     return normalize_context_tags(tags)
 
@@ -196,5 +212,12 @@ def infer_required_context_tags(
     ]
     if "interchange" in cat or _contains_any_keyword(cm, interchange_kws):
         add(_TAG_INTERCHANGE)
+
+    if (
+        "change intersection skew angle" in cm
+        or "change minimum intersection angle" in cm
+        or ("realign" in cm and "intersection" in cm)
+    ):
+        add(_TAG_INTERSECTION_SKEW)
 
     return normalize_context_tags(tags)

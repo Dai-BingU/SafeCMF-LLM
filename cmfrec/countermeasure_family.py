@@ -29,6 +29,10 @@ def mechanism_family(item: dict[str, Any]) -> str:
     text = f"{cm} {cat} {sub}"
 
     # Active transportation and crossings.
+    if "high visibility crosswalk" in text or "high visibility marked crossing" in text:
+        return "active_transport_high_visibility_crossing"
+    if "refuge island" in text or "curb extension" in text:
+        return "active_transport_uncontrolled_crossing_refuge"
     if any(x in text for x in ["pedestrian hybrid beacon", "hawk", "rapid flashing beacon", "rrfb"]):
         return "active_transport_uncontrolled_crossing_beacon"
     if "raised median" in text and any(x in text for x in ["crosswalk", "pedestrian", "refuge"]):
@@ -57,12 +61,28 @@ def mechanism_family(item: dict[str, Any]) -> str:
         return "active_transport_bicycle_lane"
     if "cycle track" in text or "bicycle track" in text:
         return "active_transport_bicycle_track"
+    if "raised bicycle crossing" in text:
+        return "active_transport_bicycle_crossing_speed_control"
+    if "sidewalk" in text:
+        return "active_transport_sidewalk"
 
     # Intersection traffic control and turn-conflict treatments.
+    if (
+        "change intersection skew angle" in text
+        or "change minimum intersection angle" in text
+        or ("realign" in text and "intersection" in text)
+    ):
+        return "intersection_skew_realignment"
     if "roundabout" in text:
         return "intersection_control_roundabout"
     if "all way stop" in text or "allway stop" in text:
         return "intersection_control_all_way_stop"
+    if (
+        "install two way stop controlled" in text
+        or "install a stop sign on both minor approaches" in text
+        or "establish appropriate minor road stop control" in text
+    ):
+        return "intersection_control_minor_road_stop"
     if "install a traffic signal" in text or "install traffic signal" in text or "signalization" in text:
         return "intersection_control_signalization"
     if "flashing beacon" in text and ("stop controlled" in text or "intersection" in text):
@@ -95,6 +115,13 @@ def mechanism_family(item: dict[str, Any]) -> str:
     if "left turn lane" in text or "left turn lanes" in text:
         return "intersection_left_turn_lane"
     if (
+        "prohibit left turn" in text
+        or "prohibit left turns" in text
+        or "no left turn" in text
+        or "restrict left turn" in text
+    ):
+        return "intersection_left_turn_restriction"
+    if (
         "left turn phas" in text
         or "protected permissive" in text
         or "protected only" in text
@@ -119,9 +146,22 @@ def mechanism_family(item: dict[str, Any]) -> str:
         return "signal_operations_adaptive_control"
     if "red light camera" in text:
         return "signal_operations_red_light_camera"
+    if "red light indicator" in text:
+        return "signal_operations_red_light_indicator"
+    if (
+        "dynamic signal warning" in text
+        or "vehicles entering when flashing" in text
+        or "intersection conflict warning" in text
+        or " icws " in f" {text} "
+    ):
+        return "intersection_warning_conflict_system"
     if "signal head" in text or "signal visibility" in text or "backplate" in text or "mast arm" in text:
         return "signal_visibility"
-    if "yellow" in text and "all red" in text:
+    if (
+        "total change interval" in text
+        or "all red clearance interval" in text
+        or ("yellow" in text and "all red" in text)
+    ):
         return "signal_change_interval"
 
     # Lane departure, roadside, and delineation.
@@ -139,7 +179,11 @@ def mechanism_family(item: dict[str, Any]) -> str:
         return "shoulder_improvement_pave_deteriorated"
     if "pave shoulder" in text or "add new paved shoulder" in text:
         return "shoulder_improvement_pave"
-    if "widen paved shoulder" in text or "widen shoulder" in text:
+    if (
+        "widen paved shoulder" in text
+        or "widen shoulder" in text
+        or "wide unpaved shoulder" in text
+    ):
         return "shoulder_improvement_widen"
     if "wider edgeline" in text or "wider edgelines" in text or "wider longitudinal" in text:
         return "lane_departure_wider_markings"
@@ -174,8 +218,14 @@ def mechanism_family(item: dict[str, Any]) -> str:
         return "roadside_lateral_clearance"
     if "sideslope" in text or "side slope" in text or "flatten slope" in text:
         return "roadside_sideslope_improvement"
-    if ("remove" in text or "relocate" in text) and "fixed object" in text:
+    if ("remove" in text or "relocate" in text) and (
+        "fixed object" in text or "roadside object" in text
+    ):
         return "roadside_fixed_object_removal"
+    if "clear zone" in text or "roadside clear zone" in text or "roadside recovery area" in text:
+        return "roadside_clear_zone"
+    if "roadside barrier" in text or "crash cushion" in text:
+        return "roadside_barrier_or_crash_cushion"
     if "median barrier" in text or "cable median barrier" in text:
         return "median_barrier"
     if "guardrail" in text:
@@ -184,6 +234,8 @@ def mechanism_family(item: dict[str, Any]) -> str:
     # Segment access management and lane configuration.
     if "raised median" in text:
         return "access_management_raised_median"
+    if "reduce driveways" in text or "consolidate driveways" in text or "relocate driveways" in text:
+        return "access_management_driveway_reduction"
     if "driveway density" in text or "driveway" in text:
         return "access_management_driveway"
     if "absence of access points" in text or ("access points" in text and "absence" in text):
@@ -192,7 +244,9 @@ def mechanism_family(item: dict[str, Any]) -> str:
         return "access_management_median_opening"
     if "road diet" in text or "4 to 3" in text or "narrow cross section" in text:
         return "lane_reconfiguration_road_diet"
-    if "passing lane" in text or "climbing lane" in text:
+    if "widen narrow pavement" in text:
+        return "lane_reconfiguration_pavement_widening"
+    if "passing lane" in text or "passing relief lane" in text or "climbing lane" in text:
         return "passing_or_climbing_lane"
 
     # Lighting and speed.
@@ -200,13 +254,19 @@ def mechanism_family(item: dict[str, Any]) -> str:
         return "lighting"
     if "speed camera" in text or "automated speed" in text or "speed enforcement" in text:
         return "speed_enforcement"
+    if "speed hump" in text:
+        return "speed_management_traffic_calming"
     if "decreasing posted speed" in text or "posted speed limit" in text:
         return "speed_management_posted_limit"
     if "variable speed limit" in text:
         return "speed_management_variable_speed_limit"
     if "fixed automated spray technology" in text or " fast " in f" {text} ":
         return "winter_weather_anti_icing_fast"
-    if "snow" in text or "slush" in text or "ice" in text:
+    # Token matching matters here: substring matching classified "practice" as
+    # containing "ice" and therefore mislabeled signal change intervals as a
+    # winter-weather treatment.
+    weather_tokens = set(text.split())
+    if weather_tokens.intersection({"snow", "slush", "ice", "icy"}):
         return "winter_weather_snow_ice_control"
     if "frontage road" in text and "one way" in text:
         return "frontage_road_one_way_conversion"

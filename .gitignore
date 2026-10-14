@@ -30,3 +30,21 @@ data/repair/labels.source_preserving_repairs_v*.jsonl
 data/release/*.jsonl
 !data/release/README.md
 !data/release/examples100.jsonl
+
+# Public data allowlist.
+data/*
+!data/evidence_store.jsonl
+!data/release/
+data/release/*
+!data/release/README.md
+!data/release/manifest.json
+!data/release/examples100.jsonl
+
+# Local experiment outputs and model checkpoints.
+results/
+*.safetensors
+*.pt
+*.pth
+*.bin
+.venv/
+.env.*

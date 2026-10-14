@@ -17,7 +17,7 @@ from cmfrec.context_tags import infer_context_tags_from_user_text
 from cmfrec.facility import infer_facility_type_from_user_text
 from cmfrec.mechanism_recall import candidate_context_mismatch
 from cmfrec.scoring import Query, score_row
-from scripts.demo_end_to_end_compare import _build_score_row
+from cmfrec.evidence import build_score_row as _build_score_row
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:

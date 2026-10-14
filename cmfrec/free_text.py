@@ -54,6 +54,7 @@ _RE_GEOM_MULTI = re.compile(
     r"\b(more than\s*4\s*legs|multi[-\s]*leg|5[-\s]*leg|6[-\s]*leg|five[-\s]*leg|six[-\s]*leg)\b",
     re.I,
 )
+_RE_INTERSTATE_ROUTE = re.compile(r"(?<![a-z0-9])i-\s*\d+(?![a-z0-9])", re.I)
 
 
 def infer_query_from_text(text: str) -> InferredQuery:
@@ -78,19 +79,26 @@ def infer_query_from_text(text: str) -> InferredQuery:
     crash_type: str | None = None
     # Crash type / conflict type heuristics (align to common CMF Clearinghouse labels)
     crash_patterns: list[tuple[str, list[str]]] = [
-        ("Rear end", ["rear end", "rear-end", "rearend"]),
-        ("Angle", ["angle crash", "angle"]),
+        ("Rear end", ["rear end", "rear-end", "rearend", "sudden stopping"]),
+        ("Angle", ["angle crash", "angle", "side-impact", "side impact", "crossing-path", "crossing path"]),
         ("Cross median", ["cross median", "cross-median", "crossing the median", "median crossover"]),
-        ("Run off road", ["run off road", "run-off-road", "road departure", "off road"]),
+        ("Run off road", ["run off road", "run-off-road", "road departure", "lane departure", "lane-departure", "roadside crash", "roadside crashes", "off road", "loss-of-control", "loss of control"]),
         ("Head on", ["head on", "head-on"]),
         ("Sideswipe", ["sideswipe", "side swipe"]),
         ("Fixed object", ["fixed object", "object collision", "tree", "pole"]),
-        ("Vehicle/pedestrian", ["pedestrian", "ped"]),
-        ("Vehicle/bicycle", ["bicycle", "bicyclist", "cyclist"]),
-        ("Nighttime", ["nighttime", "at night", "dark"]),
+        ("Left turn", ["left-turn", "left turn", "left-turning", "left turning"]),
+        ("Right turn", ["right-turn", "right turn"]),
+        ("Single vehicle", ["single-vehicle", "single vehicle"]),
+        ("Multiple vehicle", ["multi-vehicle", "multiple-vehicle", "multiple vehicle", "multivehicle", "mixed crash"]),
+        ("Speed related", ["speed-related", "speed related", "speeding", "high-speed", "high speed", "high approach speed", "high approach speeds", "high operating speed", "high operating speeds"]),
+        ("Truck", ["truck-involved", "truck involved", "truck crash"]),
+        ("Parking related", ["parking-related", "parking related"]),
+        ("Vehicle/pedestrian", ["pedestrian", "ped", "people crossing", "person crossing"]),
+        ("Vehicle/bicycle", ["bicycle", "bicycles", "bicyclist", "cyclist", "cycling"]),
+        ("Nighttime", ["nighttime", "at night", "after dark", "dark", "low-light", "low light"]),
         ("Dry weather", ["dry weather", "dry road", "clear weather"]),
         ("Wet road", ["wet road", "wet roads", "wet condition", "wet conditions", "wet pavement"]),
-        ("Wet weather", ["wet weather", "rain", "snow", "icy", "ice"]),
+        ("Wet weather", ["wet weather", "wet-weather", "rain", "snow", "icy", "ice"]),
     ]
     matched_crash_types: list[str] = []
     for label, kws in crash_patterns:
@@ -108,12 +116,12 @@ def infer_query_from_text(text: str) -> InferredQuery:
         # Common user phrasing that implies rural context.
         area_type = "Rural"
         notes.append("Inferred area_type=Rural (from village/countryside phrasing)")
-    elif "urban" in tl:
-        area_type = "Urban"
-        notes.append("Inferred area_type=Urban")
     elif "suburban" in tl:
         area_type = "Suburban"
         notes.append("Inferred area_type=Suburban")
+    elif "urban" in tl:
+        area_type = "Urban"
+        notes.append("Inferred area_type=Urban")
 
     intersection_related: str | None = None
     traffic_control_type: str | None = None
@@ -140,7 +148,7 @@ def infer_query_from_text(text: str) -> InferredQuery:
     ):
         intersection_related = "no"
         notes.append("Inferred intersection_related=no")
-    elif any(kw in tl for kw in ["intersection", "signalized", "stop-controlled", "roundabout"]):
+    elif any(kw in tl for kw in ["intersection", "signalized", "stop-controlled", "yield-controlled", "roundabout"]):
         intersection_related = "yes"
         notes.append("Inferred intersection_related=yes")
     elif "segment" in tl:
@@ -185,12 +193,21 @@ def infer_query_from_text(text: str) -> InferredQuery:
         if intersection_related is None:
             intersection_related = "yes"
             notes.append("Inferred intersection_related=yes (from roundabout)")
-    elif any(kw in tl for kw in ["uncontrolled", "no control"]):
+    elif any(kw in tl for kw in ["yield sign", "yield-controlled", "yield controlled"]):
+        traffic_control_type = "Yield sign"
+        notes.append("Inferred traffic_control_type=Yield sign")
+        if intersection_related is None:
+            intersection_related = "yes"
+            notes.append("Inferred intersection_related=yes (from yield control)")
+    elif any(kw in tl for kw in ["uncontrolled", "no control", "no traffic control"]):
         traffic_control_type = "Uncontrolled"
         notes.append("Inferred traffic_control_type=Uncontrolled")
 
     roadway_type: str | None = None
-    if any(kw in tl for kw in ["interstate", "i-"]):
+    # A bare substring check for ``i-`` misclassifies ``multi-vehicle`` as an
+    # Interstate route. Accept the full word or an actual route form (I-5,
+    # I-95, etc.) only.
+    if has_phrase("interstate") or _RE_INTERSTATE_ROUTE.search(t):
         roadway_type = "Principal Arterial Interstate"
         notes.append("Inferred roadway_type=Principal Arterial Interstate")
     elif "expressway" in tl or "freeway" in tl:

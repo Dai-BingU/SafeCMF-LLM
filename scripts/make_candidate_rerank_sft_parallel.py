@@ -30,7 +30,7 @@ from scripts.make_candidate_rerank_sft import (  # noqa: E402
     trim_context,
     write_jsonl,
 )
-from scripts.demo_end_to_end_compare import _build_score_row  # noqa: E402
+from cmfrec.evidence import build_score_row as _build_score_row  # noqa: E402
 
 
 _EVIDENCES: list[dict[str, Any]] = []

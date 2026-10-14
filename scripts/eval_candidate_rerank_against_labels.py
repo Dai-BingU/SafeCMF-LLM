@@ -7,6 +7,11 @@ query context -> scorer candidate pool -> adapter selects only from candidates.
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
 import argparse
 import json
 from pathlib import Path
@@ -38,7 +43,8 @@ from cmfrec.mechanism_recall import (
     winter_weather_supplement_ids,
 )
 from cmfrec.scoring import Query, score_row
-from scripts.demo_end_to_end_compare import _build_score_row, _extract_json
+from cmfrec.evidence import build_score_row as _build_score_row
+from cmfrec.output import extract_json_object as _extract_json
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:

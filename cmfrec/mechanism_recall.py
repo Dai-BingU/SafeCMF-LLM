@@ -14,6 +14,12 @@ def _norm_text(value: object) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+def _has_winter_weather_cue(value: object) -> bool:
+    """Match weather words as tokens so `service` is not mistaken for `ice`."""
+    text = _norm_text(value)
+    return bool(re.search(r"\b(?:winter|icing|ice|snow|slush|freezing)\b", text))
+
+
 def _effect_crf(ev: dict[str, Any]) -> float:
     effect = ev.get("effect") or {}
     try:
@@ -65,12 +71,12 @@ def _access_family(ev: dict[str, Any]) -> str | None:
     sub = _norm_text(ev.get("countermeasure_subcategory"))
     text = f"{cm} {cat} {sub}"
 
-    if "driveway density" in text:
+    if "driveway density" in cm:
         return "driveway_density_formula"
-    if "absence of access points" in text or "access points" in text and "absence" in text:
+    if "reduce driveways" in cm or "consolidate driveways" in cm or "relocate driveways" in cm:
+        return "driveway_reduction"
+    if "absence of access points" in cm or "access points" in cm and "absence" in cm:
         return "access_point_control"
-    if "driveway" in text or "access management" in text:
-        return "driveway_or_access_management"
     if "median opening" in text:
         return "median_opening_management"
     if "replace twltl" in text and "raised median" in text:
@@ -79,6 +85,12 @@ def _access_family(ev: dict[str, Any]) -> str | None:
         return "raised_median"
     if "twltl" in text or "two way left turn lane" in text:
         return "twltl"
+    # Do not treat every card filed under the broad "Access management"
+    # category as a driveway treatment. That category also contains unrelated
+    # median-width evidence. Require the countermeasure/subcategory itself to
+    # describe an access or driveway intervention.
+    if any(term in f"{cm} {sub}" for term in ["driveway", "access point", "access management", "access control"]):
+        return "driveway_or_access_management"
     return None
 
 
@@ -106,6 +118,10 @@ def _access_priorities(user_text: str, query: Query) -> dict[str, float]:
             "many closely spaced",
             "closely spaced driveway",
             "closely spaced access",
+            "driveway related",
+            "driveway crash",
+            "frequently used access",
+            "frequent access point",
             "access points",
         ]
     )
@@ -118,9 +134,13 @@ def _access_priorities(user_text: str, query: Query) -> dict[str, float]:
     twltl = "twltl" in text or "two way left turn" in text or "two way left turn lane" in text
 
     priorities = {
+        "driveway_reduction": 155.0,
         "driveway_density_formula": 130.0,
-        "access_point_control": 120.0,
-        "driveway_or_access_management": 110.0,
+        # Prefer an implementable driveway-reduction/consolidation treatment
+        # over descriptive comparison cards such as "absence of access
+        # points" when both are available.
+        "driveway_or_access_management": 140.0,
+        "access_point_control": 100.0,
         "median_opening_management": 90.0,
         "raised_median": 70.0,
         "replace_twltl_with_raised_median": 65.0,
@@ -152,6 +172,8 @@ def _stop_control_family(ev: dict[str, Any]) -> str | None:
         return "flashing_led_stop_sign"
     if "all way stop" in text or "allway stop" in text:
         return "all_way_stop"
+    if "install two way stop controlled" in text or "install a stop sign on both minor approaches" in text:
+        return "minor_road_stop_install"
     return None
 
 
@@ -160,6 +182,9 @@ def _stop_control_priorities(user_text: str, query: Query) -> dict[str, float]:
     if not _is_intersection(query):
         return {}
     ctrl = _norm_text(query.traffic_control_type)
+    uncontrolled = "uncontrolled" in ctrl or "uncontrolled" in text or "no traffic control" in text
+    if uncontrolled:
+        return {"minor_road_stop_install": 140.0}
     if "stop" not in ctrl and "stop controlled" not in text and "stop-controlled" not in str(user_text).lower():
         return {}
     # This recall is for stop-control operations/visibility, not for queries
@@ -358,14 +383,14 @@ def _winter_weather_family(ev: dict[str, Any]) -> str | None:
     text = f"{cm} {_norm_text(ev.get('countermeasure_category'))} {_norm_text(ev.get('countermeasure_subcategory'))}"
     if "fixed automated spray technology" in text or " fast " in f" {text} ":
         return "fast_anti_icing"
-    if "snow" in text or "slush" in text or "ice" in text:
+    if re.search(r"\b(?:snow|slush|ice)\b", text):
         return "snow_ice_control"
     return None
 
 
 def _winter_weather_priorities(user_text: str, query: Query) -> dict[str, float]:
     text = _norm_text(user_text)
-    if not any(term in text for term in ["winter", "icing", "ice", "snow", "slush", "freezing"]):
+    if not _has_winter_weather_cue(text):
         return {}
     return {"fast_anti_icing": 145.0, "snow_ice_control": 125.0}
 
@@ -767,6 +792,7 @@ class MechanismRecallConfig:
     max_per_family: int = 1
     min_crf: float = 0.0
     min_star: float = 2.0
+    apply_applicability_filter: bool = True
 
 
 def _is_intersection(query: Query) -> bool:
@@ -940,9 +966,92 @@ def hidden_precondition_mismatch(ev: dict[str, Any], user_text: str) -> bool:
     """
     cm = _norm_text(ev.get("countermeasure"))
     text = _norm_text(user_text)
+    category = _norm_text(ev.get("countermeasure_category"))
+    prior = _norm_text((ev.get("raw") or {}).get("Prior Condition"))
+    conditions = ev.get("conditions") or {}
+    intersection_type = _norm_text(conditions.get("intersection_type"))
+    evidence_crash_type = _norm_text(conditions.get("crash_type"))
+    evidence_time = _norm_text(conditions.get("crash_time_of_day"))
+
+    ramp_query = any(term in text for term in ["ramp", "interchange", "weaving area"])
+    if ramp_query and "not interchange related" in intersection_type:
+        return True
+    if ("nighttime" in evidence_crash_type or evidence_time == "night") and not any(
+        term in text for term in ["night", "after dark", "low light", "unlit"]
+    ):
+        return True
+    if "ramp meter" in cm:
+        ramp_meter_context = any(term in text for term in ["entrance ramp", "on ramp", "on-ramp", "merge", "weaving"])
+        if not ramp_meter_context or ("ramp terminal" in text and not ramp_meter_context):
+            return True
+    if "auxiliary lane between an entrance ramp and exit ramp" in cm:
+        paired_ramp_context = "weaving" in text or ("entrance ramp" in text and "exit ramp" in text)
+        if not paired_ramp_context:
+            return True
+    if "interchange lighting" in cm and any(term in cm for term in ["full to partial", "partial plus to partial"]):
+        return True
     if "existing centerline rumble" in cm and "existing centerline rumble" not in text:
         return True
     if "existing shoulder rumble" in cm and "existing shoulder rumble" not in text:
+        return True
+    if any(term in cm for term in ["night time flash", "late night flash"]):
+        if "night" not in text and "flash" not in text:
+            return True
+    if "fixed automated spray technology" in cm or re.search(r"\bfast\b", cm):
+        if not _has_winter_weather_cue(text):
+            return True
+
+    query_mentions_pedestrian = any(
+        term in text
+        for term in [
+            "pedestrian", "crosswalk", "walking", "walker",
+            "people crossing", "person crossing",
+        ]
+    )
+    pedestrian_specific = (
+        "pedestrian" in category
+        or any(
+            term in cm
+            for term in [
+                "pedestrian",
+                "crosswalk",
+                "sidewalk",
+                "hawk",
+                "hybrid beacon",
+                "rrfb",
+                "rapid flashing beacon",
+                "barnes dance",
+            ]
+        )
+        or ("pedestrian" in prior and any(term in cm for term in ["split phase", "cycle length", "signal phase"]))
+    )
+    if pedestrian_specific and not query_mentions_pedestrian:
+        return True
+
+    query_mentions_bicycle = any(
+        term in text
+        for term in ["bicycle", "bike", "cyclist", "cycling", "people on bicycles", "person on a bicycle"]
+    )
+    bicycle_specific = "bicycle" in category or any(
+        term in cm for term in ["bicycle", "bike lane", "cycle track", "cycling"]
+    )
+    if bicycle_specific and not query_mentions_bicycle:
+        return True
+    skew_specific = cm in {"change intersection skew angle", "change minimum intersection angle"} or (
+        "realign" in cm and "intersection" in cm
+    )
+    query_mentions_skew = any(
+        term in text
+        for term in [
+            "skewed intersection",
+            "skewed three leg",
+            "skewed four leg",
+            "skewed angle",
+            "intersection skew",
+            "skew angle",
+        ]
+    )
+    if skew_specific and not query_mentions_skew:
         return True
     return False
 
@@ -961,6 +1070,40 @@ def candidate_context_mismatch(ev: dict[str, Any], user_text: str, query: Query)
     raw_text = str(user_text or "").lower()
     ctrl = _norm_text(query.traffic_control_type)
     facility = _norm_text(query.facility_type)
+
+    skew_specific = cm in {"change intersection skew angle", "change minimum intersection angle"} or (
+        "realign" in cm and "intersection" in cm
+    )
+    if skew_specific:
+        query_mentions_skew = any(
+            term in text
+            for term in [
+                "skewed intersection",
+                "skewed three leg",
+                "skewed four leg",
+                "skewed angle",
+                "intersection skew",
+                "skew angle",
+            ]
+        )
+        conditions = ev.get("conditions") or {}
+        if not query_mentions_skew:
+            return True
+        if _norm_text(query.area_type) not in {"rural", "urban"}:
+            return True
+        if _norm_text(query.traffic_control_type) != "stop controlled":
+            return True
+        if _norm_text(conditions.get("area_type")) != _norm_text(query.area_type):
+            return True
+        if _norm_text(conditions.get("traffic_control_type")) != _norm_text(query.traffic_control_type):
+            return True
+        if _norm_text(conditions.get("intersection_geometry")) != _norm_text(query.intersection_geometry):
+            return True
+        if (
+            _norm_text(conditions.get("roadway_division_type")) == "undivided"
+            and any(term in text for term in ["divided arterial", "divided road"])
+        ):
+            return True
 
     query_is_signalized = (
         "signalized" in text
@@ -983,6 +1126,24 @@ def candidate_context_mismatch(ev: dict[str, Any], user_text: str, query: Query)
         or "signalisation" in cm
     )
     if query_is_signalized and query_is_intersection and installs_new_signal:
+        return True
+
+    # Existing ramps/interchanges should not receive project-development cards
+    # whose action is to create an interchange from an at-grade intersection.
+    # Conversions between interchange forms (for example, diamond to DDI) remain
+    # eligible because they can be genuine retrofit alternatives.
+    query_is_interchange = "interchange" in facility or any(
+        term in text for term in ["interchange", "entrance ramp", "exit ramp", "loop ramp", "ramp terminal"]
+    )
+    if query_is_interchange and any(
+        term in cm
+        for term in [
+            "convert at grade intersection to diamond interchange",
+            "convert at grade intersections to diamond interchanges",
+            "convert at grade intersection into grade separated interchange",
+            "design diamond trumpet or cloverleaf interchange with crossroad above freeway",
+        ]
+    ):
         return True
 
     median_opening_context = any(
@@ -1071,7 +1232,7 @@ def candidate_context_mismatch(ev: dict[str, Any], user_text: str, query: Query)
         if any(term in cm for term in ["high friction", "hfst", "microsurfacing", "pavement friction"]):
             return True
 
-    winter_weather_context = any(term in text for term in ["winter", "icing", "ice", "snow", "slush", "freezing"])
+    winter_weather_context = _has_winter_weather_cue(text)
     if winter_weather_context:
         if any(term in cm for term in ["diverging diamond", "auxiliary lane", "single lane exit ramp"]):
             return True
@@ -1220,7 +1381,7 @@ def nighttime_segment_supplement_ids(
         eid = str(ev.get("evidence_id") or "")
         if not eid or eid in existing_ids:
             continue
-        if hidden_precondition_mismatch(ev, user_text):
+        if cfg.apply_applicability_filter and hidden_precondition_mismatch(ev, user_text):
             continue
         family = _night_family(ev)
         if not family or family not in priorities:
@@ -1281,7 +1442,16 @@ def access_management_supplement_ids(
             continue
         match_score, _ = compute_match_score(row, query, match_mode="robust")
         if match_score <= 0:
-            continue
+            # Explicit driveway/access-conflict wording may still support a
+            # conditional driveway-reduction card when the evidence's exact
+            # roadway class or starting driveway density is not stated.  Keep
+            # it visible for downstream applicability review instead of
+            # falling back to non-implementable "absence of access points"
+            # comparison cards.
+            if family in {"driveway_reduction", "driveway_or_access_management"}:
+                match_score = 0.01
+            else:
+                continue
         key = (
             priorities[family],
             _crash_fit_bonus(ev, query),
@@ -1290,6 +1460,98 @@ def access_management_supplement_ids(
             _star(ev),
             crf if crf > -900 else 0.0,
         )
+        old = best_by_family.get(family)
+        if old is None or key > old[0]:
+            best_by_family[family] = (key, eid)
+
+    ranked = sorted(best_by_family.values(), key=lambda item: item[0], reverse=True)
+    return [eid for _, eid in ranked[: int(cfg.max_supplements)]]
+
+
+def _interchange_merge_family(ev: dict[str, Any]) -> str | None:
+    cm = _norm_text(ev.get("countermeasure"))
+    cat = _norm_text(ev.get("countermeasure_category"))
+    text = f"{cm} {cat}"
+    if "extend acceleration lane" in text or "length of acceleration lane" in text:
+        return "acceleration_lane_extension"
+    if "ramp meter" in text:
+        return "ramp_metering"
+    if "merge diverge" in text or "merge and diverge" in text:
+        return "merge_diverge_simplification"
+    if "continuous auxiliary lane" in text or "auxiliary lane" in text:
+        return "continuous_auxiliary_lane"
+    if "extend deceleration lane" in text or "length of deceleration lane" in text:
+        return "deceleration_lane_extension"
+    if "ramp lane" in text and "modify" in text:
+        return "ramp_lane_configuration"
+    return None
+
+
+def _interchange_merge_priorities(user_text: str, query: Query) -> dict[str, float]:
+    text = _norm_text(user_text)
+    if _is_intersection(query):
+        return {}
+    if not any(term in text for term in ("ramp", "merge", "diverge", "weav", "interchange")):
+        return {}
+    entrance_or_merge = any(term in text for term in ("entrance ramp", "acceleration lane", "merge", "entering traffic"))
+    exit_or_weave = any(term in text for term in ("exit ramp", "deceleration lane", "weav", "late lane change"))
+    priorities: dict[str, float] = {}
+    if entrance_or_merge:
+        priorities.update(
+            {
+                "acceleration_lane_extension": 145.0,
+                "ramp_metering": 125.0,
+                "merge_diverge_simplification": 110.0,
+            }
+        )
+    if exit_or_weave:
+        priorities.update(
+            {
+                "continuous_auxiliary_lane": 145.0,
+                "merge_diverge_simplification": 135.0,
+                "deceleration_lane_extension": 115.0,
+                "ramp_lane_configuration": 105.0,
+                "ramp_metering": max(priorities.get("ramp_metering", 0.0), 70.0),
+            }
+        )
+    return priorities
+
+
+def interchange_merge_supplement_ids(
+    *,
+    user_text: str,
+    query: Query,
+    evidences: list[dict[str, Any]],
+    score_rows: list[dict[str, str]],
+    existing_ids: set[str] | None = None,
+    cfg: MechanismRecallConfig | None = None,
+) -> list[str]:
+    """Expose ramp-merge and weaving evidence that generic segment retrieval misses."""
+
+    cfg = cfg or MechanismRecallConfig()
+    existing_ids = set(existing_ids or set())
+    priorities = _interchange_merge_priorities(user_text, query)
+    if not priorities:
+        return []
+
+    best_by_family: dict[str, tuple[tuple[float, float, float, float], str]] = {}
+    for ev, row in zip(evidences, score_rows):
+        eid = str(ev.get("evidence_id") or "")
+        if not eid or eid in existing_ids:
+            continue
+        family = _interchange_merge_family(ev)
+        if not family or family not in priorities:
+            continue
+        if cfg.apply_applicability_filter and (
+            hidden_precondition_mismatch(ev, user_text) or candidate_context_mismatch(ev, user_text, query)
+        ):
+            continue
+        if _effect_crf(ev) < float(cfg.min_crf) or _star(ev) < float(cfg.min_star):
+            continue
+        scored = score_row(row, query, match_mode="robust")
+        if scored is None:
+            continue
+        key = (priorities[family], _star(ev), _effect_crf(ev), float(scored.total_score))
         old = best_by_family.get(family)
         if old is None or key > old[0]:
             best_by_family[family] = (key, eid)
@@ -1363,7 +1625,9 @@ def signalized_left_turn_supplement_ids(
         eid = str(ev.get("evidence_id") or "")
         if not eid or eid in existing_ids:
             continue
-        if hidden_precondition_mismatch(ev, user_text) or candidate_context_mismatch(ev, user_text, query):
+        if cfg.apply_applicability_filter and (
+            hidden_precondition_mismatch(ev, user_text) or candidate_context_mismatch(ev, user_text, query)
+        ):
             continue
         family = _signalized_left_turn_family(ev)
         if not family or family not in priorities:
@@ -1409,7 +1673,9 @@ def passing_lane_supplement_ids(
         eid = str(ev.get("evidence_id") or "")
         if not eid or eid in existing_ids:
             continue
-        if hidden_precondition_mismatch(ev, user_text) or candidate_context_mismatch(ev, user_text, query):
+        if cfg.apply_applicability_filter and (
+            hidden_precondition_mismatch(ev, user_text) or candidate_context_mismatch(ev, user_text, query)
+        ):
             continue
         family = _passing_lane_family(ev)
         if not family or family not in priorities:
@@ -1455,7 +1721,9 @@ def _generic_family_supplement_ids(
         eid = str(ev.get("evidence_id") or "")
         if not eid or eid in existing_ids:
             continue
-        if hidden_precondition_mismatch(ev, user_text) or candidate_context_mismatch(ev, user_text, query):
+        if cfg.apply_applicability_filter and (
+            hidden_precondition_mismatch(ev, user_text) or candidate_context_mismatch(ev, user_text, query)
+        ):
             continue
         family = family_fn(ev)
         if not family or family not in priorities:
@@ -1749,6 +2017,118 @@ def stop_control_supplement_ids(
             _effect_crf(ev),
             float(scored.total_score),
         )
+        old = best_by_family.get(family)
+        if old is None or key > old[0]:
+            best_by_family[family] = (key, eid)
+
+    ranked = sorted(best_by_family.values(), key=lambda item: item[0], reverse=True)
+    return [eid for _, eid in ranked[: int(cfg.max_supplements)]]
+
+
+def skew_realignment_supplement_ids(
+    *,
+    user_text: str,
+    query: Query,
+    evidences: list[dict[str, Any]],
+    score_rows: list[dict[str, str]],
+    existing_ids: set[str] | None = None,
+    cfg: MechanismRecallConfig | None = None,
+) -> list[str]:
+    """Expose conditional skew-realignment CMFunctions for compatible intersections.
+
+    The Clearinghouse rows describe how crash frequency changes with the
+    intersection angle; they do not all provide one transferable scalar CMF.
+    Therefore this recall path admits null-effect CMFunction cards, but excludes
+    fixed rows whose CMF is above 1 (or CRF below 0), since those rows quantify
+    the added risk of an existing skew range rather than a beneficial treatment.
+    """
+    cfg = cfg or MechanismRecallConfig()
+    existing_ids = set(existing_ids or set())
+    text = _norm_text(user_text)
+    if not any(
+        term in text
+        for term in (
+            "skewed intersection",
+            "skewed three leg",
+            "skewed four leg",
+            "intersection skew",
+            "skew angle",
+            "skewed angle",
+            "acute intersection angle",
+        )
+    ):
+        return []
+    if not _is_intersection(query):
+        return []
+
+    query_area = _norm_text(query.area_type)
+    query_control = _norm_text(query.traffic_control_type)
+    query_geometry = _norm_text(query.intersection_geometry)
+    if query_area not in {"rural", "urban"}:
+        return []
+    if query_control != "stop controlled":
+        return []
+    if query_geometry not in {"3 leg", "4 leg"}:
+        return []
+
+    divided_query = "divided arterial" in text or "divided road" in text
+    best_by_family: dict[str, tuple[tuple[float, float, float], str]] = {}
+    for ev, row in zip(evidences, score_rows):
+        eid = str(ev.get("evidence_id") or "")
+        if not eid or eid in existing_ids:
+            continue
+        cm = _norm_text(ev.get("countermeasure"))
+        if cm == "change intersection skew angle":
+            family = "skew_angle_change"
+            family_priority = 200.0
+        elif cm == "change minimum intersection angle":
+            family = "minimum_intersection_angle"
+            family_priority = 180.0
+        else:
+            continue
+        if _star(ev) < max(3.0, float(cfg.min_star)):
+            continue
+
+        conditions = ev.get("conditions") or {}
+        if _norm_text(conditions.get("area_type")) != query_area:
+            continue
+        if _norm_text(conditions.get("traffic_control_type")) != query_control:
+            continue
+        if _norm_text(conditions.get("intersection_geometry")) != query_geometry:
+            continue
+        # Do not apply undivided-only CMFunctions to an explicitly divided-road query.
+        if divided_query and _norm_text(conditions.get("roadway_division_type")) == "undivided":
+            continue
+
+        query_lanes = query.num_lanes
+        if query_lanes is not None:
+            try:
+                min_lanes = conditions.get("min_num_lanes")
+                max_lanes = conditions.get("max_num_lanes")
+                if min_lanes is not None and float(query_lanes) < float(min_lanes):
+                    continue
+                if max_lanes is not None and float(query_lanes) > float(max_lanes):
+                    continue
+            except Exception:
+                continue
+
+        effect = ev.get("effect") or {}
+        try:
+            if effect.get("crf") is not None and float(effect["crf"]) < 0.0:
+                continue
+        except Exception:
+            continue
+        try:
+            if effect.get("cmf") is not None and float(effect["cmf"]) > 1.0:
+                continue
+        except Exception:
+            continue
+
+        # Null-effect CMFunction rows cannot receive the generic scalar-effect
+        # score, so structural matching above is authoritative for admission.
+        scored = score_row(row, query, match_mode="robust")
+        score_value = float(scored.total_score) if scored is not None else 0.0
+        key = (family_priority, _star(ev), score_value)
         old = best_by_family.get(family)
         if old is None or key > old[0]:
             best_by_family[family] = (key, eid)
