@@ -1,6 +1,6 @@
 # Example data
 
-This directory provides **100 examples sampled from the final 2,635-record training split**. No test records are included. The full study has 2,935 queries (2,635 training / 300 test); the complete query-label dataset and model weights are not included in this release.
+This directory provides **100 examples sampled from the final 2,635-record training split**. The study has 2,935 queries (2,635 training / 300 test).
 
 ## Files
 
@@ -26,6 +26,6 @@ Candidate cards include the evidence ID, countermeasure, category, applicability
 
 ## Sampling
 
-Sampling uses seed `20261014`, stratified by query completeness and reference recommendation count, with unique split groups. The sample contains 65 complete queries and 35 controlled incomplete queries. The counts for zero, one, two, and three reference recommendations are 20, 12, 21, and 47, respectively. Neither query IDs nor split-group IDs overlap the final test set.
+Sampling uses seed `20261014`, stratified by query completeness and reference recommendation count, with unique split groups. The sample contains 65 complete queries and 35 controlled incomplete queries. The counts for zero, one, two, and three reference recommendations are 20, 12, 21, and 47, respectively.
 
-The query, candidates, and target are retained from the source training records. This is a demonstration sample, not a benchmark or a complete reproduction package for the paper's reported results.
+The query, candidates, and target are retained from the source training records.
