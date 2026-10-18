@@ -1,0 +1,31 @@
+{
+  "sample_size": 1,
+  "sample_source": "final training split (2635 records)",
+  "source_release": "v3.18-final-group-stratified-2635-300-seed20260828",
+  "sampling_method": "Deterministic selection of query v3_query_0023, a complete intersection scenario with three ranked reference recommendations.",
+  "source_training_sha256": "56990512ad1a3afe2f2465580f90779bbf4514153bd3615f56595ec4526a54ed",
+  "examples_sha256": "6794759bb444b3459393607cfae08f8cc748b8c4c2e0ef2dbbeb4b7bdfdf626e",
+  "selected_qids": [
+    "v3_query_0023"
+  ],
+  "test_qid_overlap": 0,
+  "test_split_group_overlap": 0,
+  "completeness_counts": {
+    "realistic_user_information": 1
+  },
+  "recommendation_counts": {
+    "3": 1
+  },
+  "facility_counts": {
+    "At-grade intersection": 1
+  },
+  "release_style": "single_training_example",
+  "examples_path": "data/release/example.jsonl",
+  "full_study_counts": {
+    "total": 2935,
+    "training": 2635,
+    "test": 300
+  },
+  "full_training_set_included": false,
+  "test_set_included": false
+}
